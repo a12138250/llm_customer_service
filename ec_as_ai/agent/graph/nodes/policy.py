@@ -12,11 +12,21 @@ from typing import Any, Dict, TYPE_CHECKING
 
 from ec_as_ai.policies.base_policy import PolicyPrediction
 from ec_as_ai.shared.constants import ACTION_LISTEN
+from ec_as_ai.shared.timing import add_module_timing, elapsed_ms, perf_counter
 
 if TYPE_CHECKING:
     from ec_as_ai.agent.graph.state import MessageProcessingState
 
 logger = logging.getLogger(__name__)
+
+
+def _merge_prediction_timing(timing: Dict[str, Any], prediction: Any) -> None:
+    """Merge timing details emitted by a policy into graph timing metadata."""
+    metadata = getattr(prediction, "metadata", None) or {}
+    prediction_timing = metadata.get("timing")
+    if isinstance(prediction_timing, dict):
+        for key, value in prediction_timing.items():
+            timing[key] = value
 
 
 async def policy_node(state: "MessageProcessingState") -> Dict[str, Any]:
@@ -38,6 +48,8 @@ async def policy_node(state: "MessageProcessingState") -> Dict[str, Any]:
     policy_ensemble = state.get("_policy_ensemble")
     process_result = state.get("process_result")
     action_count = state.get("action_count", 0)
+    timing = state.get("timing", {"modules": {}})
+    node_start = perf_counter()
     
     logger.debug("[policy_node] 开始策略预测")
     
@@ -64,16 +76,21 @@ async def policy_node(state: "MessageProcessingState") -> Dict[str, Any]:
                     f"是否结束: {is_finished}"
                 )
                 
+                _merge_prediction_timing(timing, current_prediction)
                 return {
                     "current_prediction": current_prediction,
                     "is_finished": is_finished,
+                    "timing": timing,
                     "node_history": state.get("node_history", []) + ["policy"],
                 }
         
         # 否则使用 PolicyEnsemble 预测
         if policy_ensemble:
+            ensemble_start = perf_counter()
             prediction = await policy_ensemble.predict(tracker, domain, flows)
+            add_module_timing(timing, "policy_ensemble", elapsed_ms(ensemble_start))
             current_prediction = prediction
+            _merge_prediction_timing(timing, current_prediction)
             
             # 检查是否应该结束（action_listen 表示等待用户输入）
             is_finished = (prediction.action == ACTION_LISTEN or prediction.action is None)
@@ -92,12 +109,16 @@ async def policy_node(state: "MessageProcessingState") -> Dict[str, Any]:
             "current_prediction": None,
             "is_finished": True,
             "error": str(e),
+            "timing": timing,
             "node_history": state.get("node_history", []) + ["policy"],
         }
+    finally:
+        add_module_timing(timing, "policy", elapsed_ms(node_start))
     
     return {
         "current_prediction": current_prediction,
         "is_finished": is_finished,
+        "timing": timing,
         "node_history": state.get("node_history", []) + ["policy"],
     }
 

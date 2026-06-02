@@ -36,6 +36,7 @@ class MessageProcessingState(TypedDict, total=False):
         current_commands: 当前生成的命令结果 (GenerationResult)
         current_prediction: 当前策略预测结果 (PolicyPrediction)
         current_action_result: 当前动作执行结果 (ActionResult)
+        timing: 本轮消息处理耗时统计
         node_history: 执行过的节点历史
         error: 错误信息
         _command_generator: 命令生成器引用 (LLMCommandGenerator)
@@ -61,6 +62,7 @@ class MessageProcessingState(TypedDict, total=False):
     current_commands: Any  # Optional[GenerationResult]
     current_prediction: Any  # Optional[PolicyPrediction]
     current_action_result: Any  # Optional[ActionResult]
+    timing: Dict[str, Any]
     
     # 调试信息
     node_history: List[str]
@@ -82,6 +84,7 @@ def create_initial_state(
     command_generator: Any = None,
     command_processor: Any = None,
     policy_ensemble: Any = None,
+    timing: Optional[Dict[str, Any]] = None,
 ) -> MessageProcessingState:
     """创建初始状态。
     
@@ -116,6 +119,7 @@ def create_initial_state(
         current_commands=None,
         current_prediction=None,
         current_action_result=None,
+        timing=timing or {"modules": {}},
         # 调试信息
         node_history=[],
         error=None,

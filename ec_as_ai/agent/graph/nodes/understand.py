@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from ec_as_ai.core.tracker import UserMessage
 from ec_as_ai.dialogue_understanding.commands.slot_commands import SetSlotCommand
+from ec_as_ai.shared.timing import add_module_timing, elapsed_ms, perf_counter
 
 if TYPE_CHECKING:
     from ec_as_ai.agent.graph.state import MessageProcessingState
@@ -93,6 +94,8 @@ async def understand_node(state: "MessageProcessingState") -> Dict[str, Any]:
     
     command_generator = state.get("_command_generator")
     command_processor = state.get("_command_processor")
+    timing = state.get("timing", {"modules": {}})
+    node_start = perf_counter()
     
     logger.info(f"[understand_node] 处理消息: {input_message[:50]}...")
     
@@ -111,17 +114,21 @@ async def understand_node(state: "MessageProcessingState") -> Dict[str, Any]:
             tracker.update_with_message(user_message)
             
             # 直接处理解析出的命令
+            process_start = perf_counter()
             process_result = command_processor.process(commands, tracker)
+            add_module_timing(timing, "command_processing", elapsed_ms(process_start))
             
             logger.info(
                 f"[understand_node] payload 解析了 {len(commands)} 个命令, "
                 f"处理了 {process_result.commands_executed} 个"
             )
             
+            add_module_timing(timing, "understand", elapsed_ms(node_start))
             return {
                 "tracker": tracker,
                 "current_commands": None,  # payload 不经过 LLM，没有 generation_result
                 "process_result": process_result,
+                "timing": timing,
                 "node_history": state.get("node_history", []) + ["understand"],
             }
     
@@ -142,9 +149,11 @@ async def understand_node(state: "MessageProcessingState") -> Dict[str, Any]:
         # 2. 使用命令生成器生成命令
         if command_generator:
             flows_list = flows.flows if flows else []
+            generation_start = perf_counter()
             generation_result = await command_generator.generate(
                 tracker, domain, flows_list
             )
+            add_module_timing(timing, "command_generation", elapsed_ms(generation_start))
             current_commands = generation_result
             
             logger.warning(
@@ -154,9 +163,11 @@ async def understand_node(state: "MessageProcessingState") -> Dict[str, Any]:
             
             # 3. 使用命令处理器处理命令
             if generation_result.commands and command_processor:
+                process_start = perf_counter()
                 process_result = command_processor.process(
                     generation_result.commands, tracker
                 )
+                add_module_timing(timing, "command_processing", elapsed_ms(process_start))
                 events = process_result.events
                 
                 logger.info(
@@ -173,13 +184,17 @@ async def understand_node(state: "MessageProcessingState") -> Dict[str, Any]:
             "tracker": tracker,
             "current_commands": None,
             "error": str(e),
+            "timing": timing,
             "node_history": state.get("node_history", []) + ["understand"],
         }
+    finally:
+        add_module_timing(timing, "understand", elapsed_ms(node_start))
     
     return {
         "tracker": tracker,
         "current_commands": current_commands,
         "process_result": process_result,
+        "timing": timing,
         "node_history": state.get("node_history", []) + ["understand"],
     }
 

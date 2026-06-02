@@ -16,6 +16,7 @@ from ec_as_ai.shared.constants import DegradationReason, ACTION_DEFAULT_FALLBACK
 from ec_as_ai.shared.llm import create_llm_client
 from ec_as_ai.shared.llm.base_client import LLMClient
 from ec_as_ai.retrieval.base_retriever import SearchResult
+from ec_as_ai.shared.timing import elapsed_ms, perf_counter
 
 if TYPE_CHECKING:
     from ec_as_ai.core.tracker import DialogueStateTracker
@@ -24,6 +25,15 @@ if TYPE_CHECKING:
     from ec_as_ai.dialogue_understanding.stack.stack_frame import StackFrame
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_retriever_timing(search_results: List[SearchResult]) -> Optional[Dict[str, Any]]:
+    """Extract retriever-side timing from search result metadata."""
+    for result in search_results:
+        timing = result.metadata.get("retrieval_timing")
+        if isinstance(timing, dict):
+            return timing
+    return None
 
 
 @dataclass
@@ -250,15 +260,27 @@ class EnterpriseSearchPolicy(Policy):
             return PolicyPrediction.abstain(self.name)
         
         logger.info(f"[EnterpriseSearchPolicy] SearchStackFrame processing: {user_message}")
+        rag_start = perf_counter()
+        rag_timing: Dict[str, Any] = {}
         
         try:
             # 尝试知识库检索
             if self.config.retrieval.enabled and self._retriever:
+                search_start = perf_counter()
                 search_results = await self._search(user_message, tracker)
+                rag_timing["retrieval_ms"] = elapsed_ms(search_start)
+                retriever_timing = _extract_retriever_timing(search_results)
+                if not retriever_timing:
+                    retriever_timing = getattr(self._retriever, "last_timing", None)
+                if retriever_timing:
+                    rag_timing["retriever"] = retriever_timing
                 
                 if search_results:
                     logger.info(f"[EnterpriseSearchPolicy] 检索到 {len(search_results)} 条结果，开始生成RAG回答")
+                    answer_start = perf_counter()
                     answer = await self._generate_rag_answer(user_message, search_results)
+                    rag_timing["answer_generation_ms"] = elapsed_ms(answer_start)
+                    rag_timing["total_ms"] = elapsed_ms(rag_start)
                     logger.info(f"[EnterpriseSearchPolicy] RAG回答: {answer[:200] if answer else 'None'}...")
                     
                     if answer and "[NO_RAG_ANSWER]" not in answer:
@@ -276,12 +298,16 @@ class EnterpriseSearchPolicy(Policy):
                                 "text": answer,
                                 "degradation_reason": DegradationReason.DEFAULT,
                                 "search_results": [r.content for r in search_results],
+                                "timing": {"rag": rag_timing},
                             },
                         )
             
             # 降级到闲聊
             if self.config.chitchat_enabled:
+                chitchat_start = perf_counter()
                 chitchat_answer = await self._generate_chitchat_answer(user_message)
+                rag_timing["fallback_chitchat_ms"] = elapsed_ms(chitchat_start)
+                rag_timing["total_ms"] = elapsed_ms(rag_start)
                 if chitchat_answer:
                     tracker.dialogue_stack.pop()
                     # 记录 Pattern 执行历史
@@ -295,6 +321,7 @@ class EnterpriseSearchPolicy(Policy):
                         metadata={
                             "text": chitchat_answer,
                             "degradation_reason": DegradationReason.CHITCHAT,
+                            "timing": {"rag": rag_timing},
                         },
                     )
             
@@ -306,7 +333,10 @@ class EnterpriseSearchPolicy(Policy):
                 action=ACTION_DEFAULT_FALLBACK,
                 confidence=0.5,
                 policy_name=self.name,
-                metadata={"degradation_reason": DegradationReason.CANNOT_HANDLE},
+                metadata={
+                    "degradation_reason": DegradationReason.CANNOT_HANDLE,
+                    "timing": {"rag": {**rag_timing, "total_ms": elapsed_ms(rag_start)}},
+                },
             )
             
         except Exception as e:
@@ -321,7 +351,11 @@ class EnterpriseSearchPolicy(Policy):
                 action=ACTION_DEFAULT_FALLBACK,
                 confidence=0.3,
                 policy_name=self.name,
-                metadata={"degradation_reason": DegradationReason.INTERNAL_ERROR, "error": str(e)},
+                metadata={
+                    "degradation_reason": DegradationReason.INTERNAL_ERROR,
+                    "error": str(e),
+                    "timing": {"rag": {**rag_timing, "total_ms": elapsed_ms(rag_start)}},
+                },
             )
     
     async def _handle_chitchat_frame(

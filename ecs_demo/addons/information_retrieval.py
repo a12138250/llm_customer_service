@@ -42,6 +42,7 @@ from langchain_core.prompts import (
 
 # 导入 ec_as_ai 基类
 from ec_as_ai.retrieval.base_retriever import InformationRetrieval, SearchResult
+from ec_as_ai.shared.timing import elapsed_ms, perf_counter
 
 # 配置控制台日志
 logger = logging.getLogger("retrieval")
@@ -544,9 +545,16 @@ class GraphRAG(InformationRetrieval):
         整个检索流程的主入口，按顺序执行各步骤并返回结果。
         """
 
+        total_start = perf_counter()
+        retrieval_timing: Dict[str, Any] = {}
+        
         # 如果查询为空，则返回空列表
         query = (query or "").strip()
         if not query:
+            self.last_timing = {
+                "total_ms": elapsed_ms(total_start),
+                "empty_query": True,
+            }
             return []
 
         # 获取用户ID
@@ -556,21 +564,34 @@ class GraphRAG(InformationRetrieval):
         # 获取聊天历史
         chat_history = get_chat_history(tracker_state, user_id) if tracker_state else query
         # 获取入口节点标签
+        route_start = perf_counter()
         route_res = await self.route_label(chat_history)
+        retrieval_timing["route_label_ms"] = elapsed_ms(route_start)
         # 检索入口节点
+        node_retrieval_start = perf_counter()
         entry_nodes = await self.node_retrieval(route_res, 10)
+        retrieval_timing["node_retrieval_ms"] = elapsed_ms(node_retrieval_start)
         # 生成 Cypher 语句
+        generate_start = perf_counter()
         cypher = await self.generate_cypher(query, entry_nodes)
+        retrieval_timing["generate_cypher_ms"] = elapsed_ms(generate_start)
         # 验证 Cypher 语句
+        validate_start = perf_counter()
         errors = await self.validate_cypher(query, entry_nodes, cypher)
+        retrieval_timing["validate_cypher_ms"] = elapsed_ms(validate_start)
         # 校正 Cypher 语句
         if errors:
+            correct_start = perf_counter()
             cypher = await self.correct_cypher(query, entry_nodes, cypher, errors)
+            retrieval_timing["correct_cypher_ms"] = elapsed_ms(correct_start)
         # 校正关系方向。如果某个关系和其反向关系都不合法，会返回空字符串
+        direction_start = perf_counter()
         cypher = self.cypher_corrector(cypher)
+        retrieval_timing["cypher_direction_correct_ms"] = elapsed_ms(direction_start)
         logger.info("Cypher校正:%s", cypher)
         # 执行 Cypher 语句
         results = []
+        execute_start = perf_counter()
         try:
             records = self.driver.execute_query(cypher).records
             for rec in records:
@@ -582,11 +603,21 @@ class GraphRAG(InformationRetrieval):
                 # 构建 SearchResult，设置友好的 text 和 metadata
                 results.append(SearchResult(
                     text=text,
-                    metadata={"source": source, "raw_data": record_dict},
+                    metadata={
+                        "source": source,
+                        "raw_data": record_dict,
+                        "retrieval_timing": retrieval_timing,
+                    },
                     score=1.0
                 ))
         except Exception as e:
             logger.warning("执行Cypher语句异常: %s", e)
+        retrieval_timing["execute_cypher_ms"] = elapsed_ms(execute_start)
+        retrieval_timing["total_ms"] = elapsed_ms(total_start)
+        retrieval_timing["result_count"] = len(results)
+        self.last_timing = retrieval_timing
+        for result in results:
+            result.metadata["retrieval_timing"] = retrieval_timing
         logger.info("检索结果: %s", results)
         return results
 

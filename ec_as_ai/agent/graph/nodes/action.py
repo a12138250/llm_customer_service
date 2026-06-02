@@ -12,6 +12,7 @@ from typing import Any, Dict, TYPE_CHECKING
 
 from ec_as_ai.agent.actions import get_action, ActionResult
 from ec_as_ai.core.tracker import BotMessage
+from ec_as_ai.shared.timing import add_module_timing, elapsed_ms, perf_counter
 
 if TYPE_CHECKING:
     from ec_as_ai.agent.graph.state import MessageProcessingState
@@ -41,14 +42,18 @@ async def action_node(state: "MessageProcessingState") -> Dict[str, Any]:
     current_prediction = state.get("current_prediction")
     final_responses = list(state.get("final_responses", []))
     action_count = state.get("action_count", 0)
+    timing = state.get("timing", {"modules": {}})
+    node_start = perf_counter()
     
     # 获取命令生成器配置（用于闲聊动作）
     command_generator = state.get("_command_generator")
     
     if not current_prediction or not current_prediction.action:
+        add_module_timing(timing, "action", elapsed_ms(node_start))
         return {
             "current_action_result": None,
             "action_count": action_count,
+            "timing": timing,
             "node_history": state.get("node_history", []) + ["action"],
         }
     
@@ -64,6 +69,7 @@ async def action_node(state: "MessageProcessingState") -> Dict[str, Any]:
             return {
                 "current_action_result": ActionResult(success=False),
                 "action_count": action_count + 1,
+                "timing": timing,
                 "node_history": state.get("node_history", []) + ["action"],
             }
         
@@ -83,7 +89,11 @@ async def action_node(state: "MessageProcessingState") -> Dict[str, Any]:
             }
         
         # 执行动作
+        action_start = perf_counter()
         result = await action.run(tracker, domain, **kwargs)
+        action_duration = elapsed_ms(action_start)
+        add_module_timing(timing, "action_execution", action_duration)
+        add_module_timing(timing, f"action:{action_name}", action_duration)
         
         # 如果是 utter 动作但没有产生响应，尝试使用 fallback_action
         # 这是为了支持 collect 步骤中 action_ask_xxx 优先于 utter_ask_xxx 的机制
@@ -98,7 +108,11 @@ async def action_node(state: "MessageProcessingState") -> Dict[str, Any]:
             )
             fallback_action = get_action(fallback_action_name)
             if fallback_action:
+                fallback_start = perf_counter()
                 result = await fallback_action.run(tracker, domain, **kwargs)
+                fallback_duration = elapsed_ms(fallback_start)
+                add_module_timing(timing, "action_execution", fallback_duration)
+                add_module_timing(timing, f"action:{fallback_action_name}", fallback_duration)
                 action_name = fallback_action_name  # 更新动作名以便后续记录
         
         # 累积响应
@@ -137,6 +151,7 @@ async def action_node(state: "MessageProcessingState") -> Dict[str, Any]:
             "final_responses": final_responses,
             "action_count": action_count + 1,
             "is_finished": wait_for_input,  # 收集槽位后等待用户输入（flow_completed 时除外）
+            "timing": timing,
             "node_history": state.get("node_history", []) + ["action"],
         }
         
@@ -146,8 +161,11 @@ async def action_node(state: "MessageProcessingState") -> Dict[str, Any]:
             "current_action_result": ActionResult(success=False),
             "action_count": action_count + 1,
             "error": str(e),
+            "timing": timing,
             "node_history": state.get("node_history", []) + ["action"],
         }
+    finally:
+        add_module_timing(timing, "action", elapsed_ms(node_start))
 
 
 # 导出

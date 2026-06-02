@@ -137,6 +137,52 @@
             color: #e2e8f0;
             border-bottom-left-radius: 4px;
         }
+        .timing-box {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid rgba(148, 163, 184, 0.25);
+            color: #94a3b8;
+            font-size: 11px;
+        }
+        .timing-total {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 6px;
+            border-radius: 6px;
+            background: rgba(16, 185, 129, 0.14);
+            color: #86efac;
+            font-weight: 600;
+        }
+        .timing-box details {
+            margin-top: 6px;
+        }
+        .timing-box summary {
+            cursor: pointer;
+            color: #cbd5e1;
+            list-style-position: inside;
+        }
+        .timing-grid {
+            display: grid;
+            grid-template-columns: minmax(96px, 1fr) auto;
+            gap: 4px 10px;
+            margin-top: 6px;
+        }
+        .timing-name {
+            min-width: 0;
+            overflow-wrap: anywhere;
+        }
+        .timing-value {
+            color: #e2e8f0;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+        }
+        .timing-section-title {
+            grid-column: 1 / -1;
+            margin-top: 6px;
+            color: #e94560;
+            font-weight: 700;
+        }
         /* 消息按钮 */
         .message-buttons {
             display: flex;
@@ -363,7 +409,8 @@
                     data.data.forEach(msg => {
                         const text = msg.text || JSON.stringify(msg);
                         const buttons = msg.buttons || [];
-                        addMessage(text, 'bot', buttons);
+                        const timing = msg.custom && msg.custom.timing ? msg.custom.timing : null;
+                        addMessage(text, 'bot', buttons, timing);
                     });
                     // 刷新状态
                     setTimeout(refreshState, 100);
@@ -385,11 +432,89 @@
         }
         
         // 添加消息（支持按钮）
-        function addMessage(text, type, buttons) {
+        function formatTimingValue(value) {
+            if (typeof value !== 'number') return '-';
+            if (value >= 1000) return (value / 1000).toFixed(2) + 's';
+            return value.toFixed(2) + 'ms';
+        }
+
+        function appendTimingRow(container, name, value) {
+            const nameEl = document.createElement('div');
+            nameEl.className = 'timing-name';
+            nameEl.textContent = name;
+            const valueEl = document.createElement('div');
+            valueEl.className = 'timing-value';
+            valueEl.textContent = formatTimingValue(value);
+            container.appendChild(nameEl);
+            container.appendChild(valueEl);
+        }
+
+        function appendTimingSection(container, title) {
+            const titleEl = document.createElement('div');
+            titleEl.className = 'timing-section-title';
+            titleEl.textContent = title;
+            container.appendChild(titleEl);
+        }
+
+        function createTimingBox(timing) {
+            if (!timing || typeof timing !== 'object') return null;
+
+            const box = document.createElement('div');
+            box.className = 'timing-box';
+
+            const total = document.createElement('span');
+            total.className = 'timing-total';
+            total.textContent = '总耗时 ' + formatTimingValue(timing.total_ms);
+            box.appendChild(total);
+
+            const details = document.createElement('details');
+            const summary = document.createElement('summary');
+            summary.textContent = '模块耗时';
+            details.appendChild(summary);
+
+            const grid = document.createElement('div');
+            grid.className = 'timing-grid';
+
+            if (timing.modules) {
+                appendTimingSection(grid, '处理链路');
+                Object.entries(timing.modules).forEach(([name, data]) => {
+                    const label = data.count && data.count > 1 ? `${name} ×${data.count}` : name;
+                    appendTimingRow(grid, label, data.total_ms);
+                });
+            }
+
+            if (timing.rag) {
+                appendTimingSection(grid, 'RAG');
+                if (typeof timing.rag.total_ms === 'number') appendTimingRow(grid, 'rag.total', timing.rag.total_ms);
+                if (typeof timing.rag.retrieval_ms === 'number') appendTimingRow(grid, 'rag.retrieval', timing.rag.retrieval_ms);
+                if (typeof timing.rag.answer_generation_ms === 'number') appendTimingRow(grid, 'rag.answer', timing.rag.answer_generation_ms);
+                if (typeof timing.rag.fallback_chitchat_ms === 'number') appendTimingRow(grid, 'rag.fallback_chitchat', timing.rag.fallback_chitchat_ms);
+
+                if (timing.rag.retriever) {
+                    appendTimingSection(grid, 'GraphRAG');
+                    Object.entries(timing.rag.retriever).forEach(([name, value]) => {
+                        if (typeof value === 'number' && name.endsWith('_ms')) {
+                            appendTimingRow(grid, name.replace(/_ms$/, ''), value);
+                        }
+                    });
+                }
+            }
+
+            details.appendChild(grid);
+            box.appendChild(details);
+            return box;
+        }
+
+        function addMessage(text, type, buttons, timing) {
             const box = document.getElementById('chat-box');
             const div = document.createElement('div');
             div.className = 'message ' + type;
             div.textContent = text;
+
+            const timingBox = createTimingBox(timing);
+            if (timingBox) {
+                div.appendChild(timingBox);
+            }
             
             // 如果有按钮，添加按钮容器
             if (buttons && buttons.length > 0) {

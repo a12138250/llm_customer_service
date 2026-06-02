@@ -34,6 +34,12 @@ from ec_as_ai.dialogue_understanding.flow import FlowsList, FlowLoader
 from ec_as_ai.dialogue_understanding.generator import LLMCommandGenerator
 from ec_as_ai.dialogue_understanding.processor import CommandProcessor
 from ec_as_ai.policies import PolicyEnsemble, FlowPolicy, EnterpriseSearchPolicy
+from ec_as_ai.shared.timing import (
+    add_module_timing,
+    attach_timing_to_messages,
+    elapsed_ms,
+    perf_counter,
+)
 from ec_as_ai.shared.yaml_loader import read_yaml_file
 from ec_as_ai.shared.config import EcAsConfig, LLMConfig
 
@@ -229,8 +235,13 @@ class Agent:
         Returns:
             处理响应
         """
+        total_start = perf_counter()
+        timing: Dict[str, Any] = {"modules": {}}
+        
         # 获取或创建Tracker
+        tracker_load_start = perf_counter()
         tracker = await self.tracker_store.get_or_create_tracker(sender_id)
+        add_module_timing(timing, "tracker_load", elapsed_ms(tracker_load_start))
         
         # 构建初始状态
         initial_state = create_initial_state(
@@ -243,11 +254,15 @@ class Agent:
             command_generator=self.command_generator,
             command_processor=self.command_processor,
             policy_ensemble=self.policy_ensemble,
+            timing=timing,
         )
         
         # 执行图
         logger.info(f"[Agent] 使用 LangGraph 处理消息: {message[:50]}...")
+        graph_start = perf_counter()
         final_state = await self.graph.ainvoke(initial_state)
+        timing = final_state.get("timing", timing)
+        add_module_timing(timing, "graph", elapsed_ms(graph_start))
         
         # 从最终状态提取结果
         updated_tracker = final_state.get("tracker", tracker)
@@ -256,7 +271,13 @@ class Agent:
         error = final_state.get("error")
         
         # 保存Tracker
+        tracker_save_start = perf_counter()
         await self.tracker_store.save(updated_tracker)
+        add_module_timing(timing, "tracker_save", elapsed_ms(tracker_save_start))
+        
+        timing["total_ms"] = elapsed_ms(total_start)
+        timing["node_history"] = node_history
+        attach_timing_to_messages(final_responses, timing)
         
         # 构建响应
         response = MessageResponse(
@@ -264,6 +285,7 @@ class Agent:
             metadata={
                 "node_history": node_history,
                 "error": error,
+                "timing": timing,
             },
         )
         

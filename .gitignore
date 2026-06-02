@@ -22,6 +22,10 @@ env/
 .idea/
 .vscode/
 
+# Local git worktrees
+.worktrees/
+worktrees/
+
 # Local demo model weights and generated indexes
 ecs_demo/models/
 ecs_demo/**/index/

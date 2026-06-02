@@ -1,0 +1,29 @@
+# Python cache and build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local configuration and secrets
+.env
+.env.*
+*.log
+
+# IDE/editor files
+.idea/
+.vscode/
+
+# Local demo model weights and generated indexes
+ecs_demo/models/
+ecs_demo/**/index/
+ecs_demo/**/indexes/
+ecs_demo/**/.cache/

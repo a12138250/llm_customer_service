@@ -19,9 +19,14 @@ vector_store:
 database:
   url: mysql+pymysql://root:${MYSQL_PASSWORD}@localhost:3306/ecommerce
 
-# Tracker存储配置
+# Tracker存储配置（MySQL持久化，重启可恢复会话）
 tracker_store:
-  type: memory
+  type: mysql
+  host: localhost
+  port: 3306
+  db: ecs
+  username: root
+  password: ${MYSQL_PASSWORD}
 
 # NLG配置
 nlg:

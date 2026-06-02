@@ -137,6 +137,29 @@
             color: #e2e8f0;
             border-bottom-left-radius: 4px;
         }
+        .thinking {
+            color: #cbd5e1;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .thinking-dots {
+            display: inline-flex;
+            gap: 3px;
+        }
+        .thinking-dots span {
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: #94a3b8;
+            animation: thinkingPulse 1.2s infinite ease-in-out;
+        }
+        .thinking-dots span:nth-child(2) { animation-delay: 0.16s; }
+        .thinking-dots span:nth-child(3) { animation-delay: 0.32s; }
+        @keyframes thinkingPulse {
+            0%, 80%, 100% { opacity: 0.35; transform: translateY(0); }
+            40% { opacity: 1; transform: translateY(-2px); }
+        }
         .timing-box {
             margin-top: 8px;
             padding-top: 8px;
@@ -252,6 +275,80 @@
             font-size: 11px;
         }
         .slot-null { color: #64748b; font-style: italic; }
+        /* Session Selector */
+        .session-selector {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex: 1;
+            min-width: 0;
+        }
+        .session-selector select {
+            flex: 1;
+            min-width: 0;
+            padding: 6px 10px;
+            background: #1e3a5f;
+            color: #e2e8f0;
+            border: 1px solid #0f3460;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            max-width: 180px;
+        }
+        .session-selector select:focus {
+            outline: none;
+            border-color: #e94560;
+        }
+        .session-actions {
+            display: flex;
+            gap: 4px;
+        }
+        .session-btn {
+            padding: 4px 8px;
+            background: #0f3460;
+            color: #94a3b8;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            white-space: nowrap;
+        }
+        .session-btn:hover {
+            background: #e94560;
+            color: white;
+        }
+        .session-new-input {
+            display: flex;
+            gap: 4px;
+            margin-top: 4px;
+        }
+        .session-new-input input {
+            flex: 1;
+            padding: 4px 8px;
+            background: #1e3a5f;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            color: #e2e8f0;
+            font-size: 11px;
+            min-width: 0;
+        }
+        .session-new-input input:focus {
+            outline: none;
+            border-color: #e94560;
+        }
+        .session-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 10px;
+            font-weight: 500;
+        }
+        .session-badge.active-flow {
+            background: rgba(233, 69, 96, 0.2);
+            color: #e94560;
+        }
         /* Events */
         .event-item { 
             padding: 8px 10px;
@@ -342,9 +439,27 @@
         
         <!-- 右侧聊天 -->
         <div class="panel">
-            <div class="panel-header">
+            <div class="panel-header" style="flex-wrap: wrap; gap: 8px;">
                 <div class="logo">EcAs<span>AI</span></div>
-                <span id="status" class="status disconnected">Disconnected</span>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <span id="session-active-flow" style="font-size: 10px; color: #64748b; display: none;"></span>
+                    <span id="status" class="status disconnected">Disconnected</span>
+                </div>
+                <div style="width: 100%; border-top: 1px solid #0f3460; padding-top: 8px;">
+                    <div style="font-size: 11px; color: #64748b; margin-bottom: 4px;">会话切换</div>
+                    <div class="session-selector">
+                        <select id="session-list" onchange="onSessionSelect()">
+                            <option value="">-- 当前会话 --</option>
+                        </select>
+                        <div class="session-actions">
+                            <button class="session-btn" onclick="loadSessions()" title="刷新会话列表">刷新</button>
+                        </div>
+                    </div>
+                    <div class="session-new-input">
+                        <input type="text" id="new-session-id" placeholder="输入会话ID切换...">
+                        <button class="session-btn" onclick="switchToSession()">切换</button>
+                    </div>
+                </div>
             </div>
             <div id="chat-box"></div>
             <div class="input-area">
@@ -393,7 +508,131 @@
         let currentFlowId = null;
         let currentFlowIndex = null;
         let trackerData = null;
-        
+        let pendingResponses = 0;
+        let thinkingMessage = null;
+        let allSessions = [];
+
+        // ==================== 会话管理 ====================
+
+        // 加载所有已存储的会话
+        async function loadSessions() {
+            try {
+                const resp = await fetch('/api/sessions');
+                if (resp.ok) {
+                    const data = await resp.json();
+                    allSessions = data.sessions || [];
+                    updateSessionDropdown();
+                }
+            } catch (e) {
+                console.error('加载会话列表失败:', e);
+            }
+        }
+
+        // 更新会话下拉框
+        function updateSessionDropdown() {
+            const select = document.getElementById('session-list');
+            const currentValue = select.value;
+
+            // 清空并重建选项
+            select.innerHTML = '<option value="">-- 当前会话 (' + sessionId.substring(0, 20) + '...) --</option>';
+
+            if (allSessions.length === 0) {
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = '(无已存储会话)';
+                opt.disabled = true;
+                select.appendChild(opt);
+            } else {
+                allSessions.forEach(s => {
+                    const opt = document.createElement('option');
+                    opt.value = s.session_id;
+                    const flowInfo = s.active_flow ? ' [' + s.active_flow + ']' : '';
+                    const countInfo = s.events_count ? ' (' + s.events_count + '轮对话)' : '';
+                    opt.textContent = s.session_id + flowInfo + countInfo;
+                    select.appendChild(opt);
+                });
+            }
+
+            // 恢复之前选中值
+            if (currentValue) {
+                select.value = currentValue;
+            }
+        }
+
+        // 下拉框选择会话
+        function onSessionSelect() {
+            const select = document.getElementById('session-list');
+            const newSessionId = select.value;
+            if (!newSessionId) return;
+            switchToSessionById(newSessionId);
+        }
+
+        // 通过输入框切换会话
+        function switchToSession() {
+            const input = document.getElementById('new-session-id');
+            const newSessionId = input.value.trim();
+            if (!newSessionId) {
+                alert('请输入会话ID');
+                return;
+            }
+            switchToSessionById(newSessionId);
+            input.value = '';
+        }
+
+        // 切换到指定会话
+        async function switchToSessionById(newSessionId) {
+            if (newSessionId === sessionId) return;
+
+            // 先检查会话是否存在
+            try {
+                const resp = await fetch('/api/sessions/' + encodeURIComponent(newSessionId));
+                if (!resp.ok) {
+                    const createNew = confirm('会话 "' + newSessionId + '" 尚未存在，是否创建新会话？');
+                    if (!createNew) return;
+                }
+            } catch (e) {
+                console.error('检查会话失败:', e);
+                return;
+            }
+
+            // 执行切换
+            sessionId = newSessionId;
+            pendingResponses = 0;
+            hideThinking();
+            document.getElementById('chat-box').innerHTML = '';
+            document.getElementById('flow-history').innerHTML = '';
+            document.getElementById('slots-table').innerHTML = '';
+            document.getElementById('events-list').innerHTML = '';
+            document.getElementById('tracker-json').textContent = '';
+            document.getElementById('flow-count').textContent = '0 flows';
+            document.getElementById('flow-diagram').innerHTML = '<div class="no-flow"><div>选择左侧的 Flow 查看图形</div></div>';
+            document.getElementById('session-active-flow').style.display = 'none';
+            currentFlowId = null;
+            currentFlowIndex = null;
+            trackerData = null;
+
+            // 更新下拉框
+            document.getElementById('session-list').value = '';
+
+            // 重新连接 WebSocket
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({type: 'connect', session_id: sessionId}));
+            }
+
+            // 自动设置用户 ID
+            setTimeout(() => {
+                const userId = document.getElementById('user-id-input').value.trim();
+                if (userId) {
+                    setUserId(false);
+                }
+            }, 300);
+
+            // 刷新会话列表
+            setTimeout(loadSessions, 500);
+        }
+
+        // ==================== WebSocket 连接 ====================
+
         // WebSocket 连接
         function connect() {
             ws = new WebSocket(`ws://${location.host}/api/stream`);
@@ -402,10 +641,12 @@
                 document.getElementById('status').className = 'status connected';
                 ws.send(JSON.stringify({type: 'connect', session_id: sessionId}));
                 refreshState();
+                loadSessions();  // 加载已有会话列表
             };
             ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 if (data.type === 'bot_response') {
+                    markResponseArrived();
                     data.data.forEach(msg => {
                         const text = msg.text || JSON.stringify(msg);
                         const buttons = msg.buttons || [];
@@ -414,9 +655,14 @@
                     });
                     // 刷新状态
                     setTimeout(refreshState, 100);
+                } else if (data.type === 'error') {
+                    markResponseArrived();
+                    addMessage(data.message || '处理消息时出现错误。', 'bot');
                 }
             };
             ws.onclose = () => {
+                pendingResponses = 0;
+                hideThinking();
                 document.getElementById('status').textContent = 'Disconnected';
                 document.getElementById('status').className = 'status disconnected';
                 setTimeout(connect, 3000);
@@ -505,6 +751,48 @@
             return box;
         }
 
+        function showThinking() {
+            if (thinkingMessage) return;
+
+            const box = document.getElementById('chat-box');
+            const div = document.createElement('div');
+            div.className = 'message bot thinking';
+
+            const label = document.createElement('span');
+            label.textContent = '正在思考';
+
+            const dots = document.createElement('span');
+            dots.className = 'thinking-dots';
+            for (let i = 0; i < 3; i++) {
+                dots.appendChild(document.createElement('span'));
+            }
+
+            div.appendChild(label);
+            div.appendChild(dots);
+            box.appendChild(div);
+            box.scrollTop = box.scrollHeight;
+            thinkingMessage = div;
+        }
+
+        function hideThinking() {
+            if (thinkingMessage && thinkingMessage.parentNode) {
+                thinkingMessage.parentNode.removeChild(thinkingMessage);
+            }
+            thinkingMessage = null;
+        }
+
+        function markRequestPending() {
+            pendingResponses += 1;
+            showThinking();
+        }
+
+        function markResponseArrived() {
+            pendingResponses = Math.max(0, pendingResponses - 1);
+            if (pendingResponses === 0) {
+                hideThinking();
+            }
+        }
+
         function addMessage(text, type, buttons, timing) {
             const box = document.getElementById('chat-box');
             const div = document.createElement('div');
@@ -530,6 +818,7 @@
                         addMessage(btn.title, 'user');
                         if (ws && ws.readyState === WebSocket.OPEN) {
                             ws.send(JSON.stringify({type: 'message', message: payload}));
+                            markRequestPending();
                         }
                     };
                     btnContainer.appendChild(button);
@@ -549,6 +838,7 @@
             addMessage(text, 'user');
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({type: 'message', message: text}));
+                markRequestPending();
             }
             input.value = '';
         }
@@ -556,6 +846,8 @@
         // 新建对话
         function newConversation() {
             sessionId = 'inspect-' + Date.now();
+            pendingResponses = 0;
+            hideThinking();
             document.getElementById('chat-box').innerHTML = '';
             document.getElementById('flow-history').innerHTML = '';
             document.getElementById('slots-table').innerHTML = '';
@@ -563,17 +855,22 @@
             document.getElementById('tracker-json').textContent = '';
             document.getElementById('flow-count').textContent = '0 flows';
             document.getElementById('flow-diagram').innerHTML = '<div class="no-flow"><div>选择左侧的 Flow 查看图形</div></div>';
+            document.getElementById('session-active-flow').style.display = 'none';
+            document.getElementById('session-list').value = '';
             currentFlowId = null;
+            currentFlowIndex = null;
+            trackerData = null;
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({type: 'connect', session_id: sessionId}));
             }
-            // 新建对话后自动设置用户 ID
+            // 新建对话后自动设置用户 ID 并刷新会话列表
             setTimeout(() => {
                 const userId = document.getElementById('user-id-input').value.trim();
                 if (userId) {
                     setUserId(false);  // 静默设置，不显示消息
                 }
-            }, 200);
+                loadSessions();
+            }, 300);
         }
         
         // 设置用户 ID
@@ -590,6 +887,9 @@
             }
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({type: 'message', message: cmd}));
+                if (showMessage) {
+                    markRequestPending();
+                }
             }
             if (showMessage) {
                 setTimeout(refreshState, 100);
@@ -666,6 +966,15 @@
             // 如果有活跃 Flow，选中它
             if (data.active_flow && !currentFlowId) {
                 selectFlow(data.active_flow);
+            }
+
+            // 更新会话状态标记
+            const flowBadge = document.getElementById('session-active-flow');
+            if (data.active_flow) {
+                flowBadge.textContent = 'Flow: ' + data.active_flow;
+                flowBadge.style.display = 'inline';
+            } else {
+                flowBadge.style.display = 'none';
             }
         }
         

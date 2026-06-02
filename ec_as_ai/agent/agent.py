@@ -325,9 +325,17 @@ class Agent:
         """
         return await self.tracker_store.retrieve(sender_id)
     
+    async def list_sessions(self) -> list[str]:
+        """列出所有已存储的会话ID。
+
+        Returns:
+            会话ID列表
+        """
+        return list(await self.tracker_store.keys())
+
     async def reset_tracker(self, sender_id: str) -> None:
         """重置指定用户的对话状态。
-        
+
         Args:
             sender_id: 发送者ID
         """
@@ -335,7 +343,7 @@ class Agent:
         if tracker:
             tracker.restart()
             await self.tracker_store.save(tracker)
-    
+
     def register_action(self, action: Action) -> None:
         """注册自定义动作。
         
@@ -537,11 +545,21 @@ class Agent:
         
         # 从 endpoints.yml 获取 Tracker 存储配置
         tracker_store_config = endpoints_config.tracker_store
+        tracker_store_kwargs = {"path": tracker_store_config.path}
+        if tracker_store_config.type == "mysql":
+            if tracker_store_config.url:
+                tracker_store_kwargs["url"] = tracker_store_config.url
+            else:
+                tracker_store_kwargs["host"] = tracker_store_config.host or "localhost"
+                tracker_store_kwargs["port"] = tracker_store_config.port or 3306
+                tracker_store_kwargs["db"] = tracker_store_config.db or "ec_as"
+                tracker_store_kwargs["username"] = tracker_store_config.username or "root"
+                tracker_store_kwargs["password"] = tracker_store_config.password or ""
         tracker_store = create_tracker_store(
             tracker_store_config.type,
-            path=tracker_store_config.path,
+            **tracker_store_kwargs,
         )
-        logger.info(f"创建 TrackerStore: type={tracker_store_config.type}, path={tracker_store_config.path}")
+        logger.info(f"创建 TrackerStore: type={tracker_store_config.type}")
         
         # 创建策略
         from ec_as_ai.policies import EnterpriseSearchPolicyConfig

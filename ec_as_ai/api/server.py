@@ -194,6 +194,35 @@ class EcAsServer:
                 logger.error(f"Error processing message: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
         
+        @app.get("/api/sessions")
+        async def list_sessions():
+            """列出所有会话。
+
+            Returns:
+                会话列表，包含 session_id、slots、events_count 等信息
+            """
+            if not self.agent:
+                raise HTTPException(status_code=503, detail="Agent not ready")
+
+            try:
+                session_ids = await self.agent.list_sessions()
+                sessions = []
+                for sid in session_ids:
+                    tracker = await self.agent.get_tracker(sid)
+                    if tracker:
+                        sessions.append({
+                            "session_id": sid,
+                            "slots": tracker.get_all_slots(),
+                            "latest_message": tracker.latest_message,
+                            "events_count": len(tracker.dialogue_turns),
+                            "active_flow": tracker.active_flow,
+                        })
+                return {"sessions": sessions, "total": len(sessions)}
+
+            except Exception as e:
+                logger.error(f"Error listing sessions: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
         @app.get("/api/sessions/{session_id}", response_model=SessionInfo)
         async def get_session(session_id: str):
             """获取会话状态。
